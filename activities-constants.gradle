@@ -1,68 +1,105 @@
+import java.util.regex.Matcher
+import java.util.regex.Pattern
 
 def generatedSrcDir = "$buildDir/generated/src/main/kotlin/"
 android.sourceSets.main.java.srcDirs += ['src/main/kotlin', "$generatedSrcDir"]
 
+
+def getCurrentFlavor() {
+    Gradle gradle = getGradle()
+    String tskReqStr = gradle.getStartParameter().getTaskRequests().toString()
+
+    Pattern pattern
+
+    if (tskReqStr.contains("assemble")) {
+        pattern = Pattern.compile("assemble(\\w+)(Release|Debug)")
+    } else {
+        pattern = Pattern.compile("generate(\\w+)(Release|Debug)")
+    }
+
+    Matcher matcher = pattern.matcher(tskReqStr)
+
+    if (matcher.find())
+        return matcher.group(1).toLowerCase()
+    else {
+        return ""
+    }
+}
+
 task activitiesConstants {
     doLast {
+        // Map<String,String> with :
+        // key = The name of the module concatenated to the name of the activity
+        // value = List of manifests of the module
+        def moduleManifests = [:]
 
-        def packageId = android.defaultConfig.applicationId
-        if (packageId == null) {
-            // if applicationId is not set in build.gradle
-            // we retrieve the applicationId from the AndroidManifest.xml
-            packageId = new XmlSlurper().parse(android.sourceSets.main.manifest.srcFile).@package.text()
+        rootProject.allprojects.each { p ->
+            p.plugins.withId("com.android.base") {
+                // find all main manifests and currentFlavor manifests
+                moduleManifests[p.name] = p.android.sourceSets
+                        .findAll { it.name in ["main", currentFlavor] }*.manifest.srcFile
+                        .findAll { it.exists() } // keep only existing manifests
+            }
         }
+
+        println "\nList of manifests in module(s) :"
+        moduleManifests.each { key, values -> println "$key = $values" }
 
         // Map<String,String> with :
         // key = The name of the module concatenated to the name of the activity
         // value = The canonical name of the activity
         def activities = [:]
 
-        println "\nScanning activities in manifests :"
-        rootProject.subprojects.each { module -> // for each modules
-            file("${module.projectDir}/.").eachFileRecurse { file ->
-                if (file.path.matches("^.*(src).*(AndroidManifest\\.xml)\$")) { // filter by **/src/**/AndroidManifest.xml
-                    println file.path
-                    def manifest = new XmlSlurper().parse(file)
-                    def defaultPackage = manifest.@package.text() // packageId specified in manifest
-                    if(defaultPackage == null) {
-                        defaultPackage = module.android.defaultConfig.applicationId
-                    }
-                    manifest.application.activity.each { activity ->
-                        def activityName = activity."@android:name".text()
-                        def key = "${module.name}${activityName - defaultPackage}".replaceAll("\\.", "").replaceAll(/\B[A-Z]/) {
-                            '_' + it
-                        }.toUpperCase()
-                        if (activityName.startsWith(".")) {
-                            activities[key] = "$defaultPackage$activityName"
-                        } else {
-                            activities[key] = activityName
-                        }
-                    }
+        moduleManifests.each { module, manifests ->
+
+            manifests.each { file ->
+
+                def manifest = new XmlSlurper().parse(file)
+                def manifestPackage = manifest.@package.text()
+
+                manifest.application.activity.each { activity ->
+                    def activityName = activity."@android:name".text()
+                    def variableName = "${activityName.split("\\.").last()}".replaceAll(/\B[A-Z]/) { '_' + it }.toUpperCase()
+                    activityName = activityName.startsWith(".") ? "$manifestPackage$activityName" : activityName
+
+                    if (activities[module] == null) activities[module] = [:]
+                    activities[module] += [(variableName): activityName]
                 }
             }
         }
 
         if (activities.size() > 0) {
-            def genSrcDir = file("$generatedSrcDir/${packageId.replaceAll("\\.", "\\/")}")
+
+            def manifestPackage = android.defaultConfig.applicationId
+            if (manifestPackage == null) {
+                // if applicationId is not set in build.gradle
+                // we retrieve the applicationId from the AndroidManifest.xml
+                manifestPackage = new XmlSlurper().parse(android.sourceSets.main.manifest.srcFile).@package.text()
+            }
+
+            def genSrcDir = file("$generatedSrcDir/${manifestPackage.replaceAll("\\.", "\\/")}")
             genSrcDir.mkdirs()
             def activityConstantKt = file("${genSrcDir.path}/ActivitiesConstant.kt")
 
-            activityConstantKt.write "package $packageId\n\n"
-            activityConstantKt << "object ActivitiesConstant {\n\n"
+            activityConstantKt.write "package $manifestPackage\n\n"
+            activityConstantKt << "class ActivitiesConstant {\n\n"
 
             println "\nActivities constants available -> ${activityConstantKt.path}"
 
-            activities.each { activityConstant ->
-                activityConstantKt << "    const val ${activityConstant.key}: String = \"${activityConstant.value}\"\n"
+            activities.keySet().each { module ->
+                activityConstantKt << "    object ${module.capitalize()} {\n"
+                activities[module].each { variable, value ->
+                    activityConstantKt << "        const val $variable: String = \"$value\"\n"
+                }
+                activityConstantKt << "    }\n\n"
             }
 
-            activityConstantKt << "\n"
             activityConstantKt << "}\n"
 
             println activityConstantKt.readLines().join("\n")
 
         }
+
     }
 }
-
 preBuild.dependsOn activitiesConstants

@@ -26,6 +26,10 @@ def getCurrentFlavor() {
     }
 }
 
+static String toCamelCase(String text) {
+    return text.toLowerCase().replaceAll("(_)([A-Za-z0-9])", { Object[] it -> it[2].toUpperCase() })
+}
+
 task activitiesConstants {
     doLast {
         // Map<String,String> with :
@@ -82,6 +86,10 @@ task activitiesConstants {
             def activityConstantKt = file("${genSrcDir.path}/ActivitiesConstant.kt")
 
             activityConstantKt.write "package $manifestPackage\n\n"
+            activityConstantKt << "import android.app.Activity\n"
+            activityConstantKt << "import android.content.Context\n"
+            activityConstantKt << "import android.content.Intent\n"
+            activityConstantKt << "import androidx.fragment.app.Fragment\n\n"
             activityConstantKt << "class ActivitiesConstant {\n\n"
 
             println "\nActivities constants available -> ${activityConstantKt.path}"
@@ -90,6 +98,13 @@ task activitiesConstants {
                 activityConstantKt << "    object ${module.capitalize()} {\n"
                 activities[module].each { variable, value ->
                     activityConstantKt << "        const val $variable: String = \"$value\"\n"
+                    activityConstantKt << "        fun Context.${toCamelCase(variable)}(block: Intent.() -> Unit = {}) = Intent().apply { setClassName(this@${toCamelCase(variable)}, $variable) }.apply(block)\n"
+                    activityConstantKt << "        fun Context.start${toCamelCase(variable).capitalize()}(block: Intent.() -> Unit = {}) = startActivity(${toCamelCase(variable)}(block))\n"
+                    activityConstantKt << "        fun Activity.start${toCamelCase(variable).capitalize()}ForResult(block: Intent.() -> Unit = {}, requestCode: Int) = startActivityForResult(${toCamelCase(variable)}(block), requestCode)\n"
+                    activityConstantKt << "        fun Fragment.start${toCamelCase(variable).capitalize()}ForResult(block: Intent.() -> Unit = {}, requestCode: Int) = context?.run { startActivityForResult(${toCamelCase(variable)}(block), requestCode) }\n"
+                    activityConstantKt << "        fun Activity.start${toCamelCase(variable).capitalize()}ForResult(requestCode: Int, block: Intent.() -> Unit = {}) = startActivityForResult(${toCamelCase(variable)}(block), requestCode)\n"
+                    activityConstantKt << "        fun Fragment.start${toCamelCase(variable).capitalize()}ForResult(requestCode: Int, block: Intent.() -> Unit = {}) = context?.run { startActivityForResult(${toCamelCase(variable)}(block), requestCode) }\n"
+                    activityConstantKt << "    \n"
                 }
                 activityConstantKt << "    }\n\n"
             }
